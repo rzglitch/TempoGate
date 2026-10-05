@@ -221,12 +221,17 @@ private:
     // workspace
     juce::TextButton originalViewButton { "ORIGINAL" }, convertedViewButton { "CONVERTED" },
                      compareViewButton { "COMPARE" };
+    juce::Label takeLabel;
+    juce::ComboBox takeBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> takeAtt;
     juce::TextButton recordButton { "RECORD" }, stopButton { "STOP" }, playButton { "PLAY" };
     PianoRollView sourceRoll, resultRoll;
 
     // selection
     juce::Label selectionLabel;
     juce::Slider selFirstSlider, selLastSlider;
+    juce::ToggleButton fromBarButton { "From Bar" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fromBarAtt;
 
     // export
     juce::TextButton dragFullButton { "DRAG MIDI TO DAW" };

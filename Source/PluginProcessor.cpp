@@ -50,6 +50,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout TempoGateAudioProcessor::cre
     layout.add (std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID ("midiThru", 1), "MIDI Thru", true));
 
+    // Take behavior on RECORD: wipe everything, layer onto the existing take,
+    // or wipe + re-record only the selected bars (punch-in).
+    layout.add (std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID ("recordMode", 1), "Take Mode",
+        juce::StringArray ({ "Replace All", "Overdub", "Punch Bars" }), 0));
+
+    // When on (and a bar range is selected), the take starts at that bar
+    // instead of the top.
+    layout.add (std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID ("startFromBar", 1), "Start From Selected Bar", false));
+
     // Metronome: MIDI click at the configured (source) tempo while recording.
     layout.add (std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID ("metroOn", 1), "Click", true));
@@ -125,6 +136,18 @@ bool TempoGateAudioProcessor::getMidiThru() const
 {
     if (auto* p = apvts.getRawParameterValue ("midiThru")) return *p > 0.5f;
     return true;
+}
+
+int TempoGateAudioProcessor::getRecordMode() const
+{
+    if (auto* p = apvts.getRawParameterValue ("recordMode")) return (int) *p;
+    return 0;
+}
+
+bool TempoGateAudioProcessor::getStartFromBar() const
+{
+    if (auto* p = apvts.getRawParameterValue ("startFromBar")) return *p > 0.5f;
+    return false;
 }
 
 bool TempoGateAudioProcessor::getMetroOn() const
@@ -229,21 +252,62 @@ void TempoGateAudioProcessor::releaseResources() {}
 void TempoGateAudioProcessor::startRecording()
 {
     syncEngineFromParams();
-    performance.clear();
-    performance.selectAllBars (barGate.getBarLengthBeats());
+    const int mode = getRecordMode(); // 0 = Replace All, 1 = Overdub, 2 = Punch Bars
+
+    // Capture the user's bar selection first: replace-all resets it below.
+    const bool wantSelStart = getStartFromBar();
+    int userFirst = 1, userLast = 4;
+    const bool hadSel = performance.getHasBarSelection();
+    if (hadSel) performance.getBarSelection (userFirst, userLast);
+
+    if (mode == 2)
+    {
+        // Punch-in: wipe only the selected bars, keep everything else with
+        // absolute bar numbers intact. Capture is confined to the range.
+        if (! performance.getHasBarSelection())
+            performance.selectAllBars (barGate.getBarLengthBeats());
+        int first = 1, last = 4;
+        performance.getBarSelection (first, last);
+        performance.removeBars (first, last);
+    }
+    else if (mode == 1)
+    {
+        // Overdub: keep the whole take (and the selection); the new pass
+        // layers on top, from the top or from the selected bar.
+    }
+    else
+    {
+        // Replace All: fresh take.
+        performance.clear();
+        performance.selectAllBars (barGate.getBarLengthBeats());
+    }
+
+    // Start point: the top, or the selected bar when enabled (and selected).
+    int startBar = 1;
+    if (wantSelStart && hadSel)
+    {
+        startBar = userFirst;
+        if (mode == 0)
+            performance.setSelectedBarRange (userFirst, userLast); // restore
+    }
+    const double startBeat = (double) (startBar - 1) * barGate.getBarLengthBeats();
+
     barGate.reset();
     barGate.startRecording();
+    if (startBar > 1)
+        barGate.jumpToBar (startBar);
     barGate.clearPausedBeats();
-    recordBeat = 0.0;
+    recordBeat = startBeat;
     lastHostPpq = -1.0;
     gateWasWaiting = false;
     pendingClickOffs.clear();
 
-    // Count-in pre-roll: the click cursor runs negative and recording of
-    // incoming MIDI starts once it reaches beat 0.
+    // Count-in pre-roll: the click cursor runs before the start beat and
+    // recording of incoming MIDI starts once it reaches it.
     const double preRoll = (double) getCountInBars() * barGate.getBarLengthBeats();
     inCountIn = (preRoll > 0.0);
-    clickCursor = inCountIn ? -preRoll : 0.0;
+    countInTargetBeat = startBeat;
+    clickCursor = inCountIn ? startBeat - preRoll : startBeat;
     lastEmittedClickBeat = (long long) std::ceil (clickCursor - 1e-9) - 1;
 
     recording = true;
@@ -525,6 +589,18 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     auto barIndexFor = [&] (double beats)
     { return juce::jmax (1, (int) (beats / barLen) + 1); };
 
+    // Punch mode: capture only inside the selected bar range (absolute beats).
+    const bool punchMode = captureThisBlock && getRecordMode() == 2;
+    double punchStartBeat = 0.0, punchEndBeat = 0.0;
+    if (punchMode)
+    {
+        int first = 1, last = 4;
+        if (performance.getHasBarSelection())
+            performance.getBarSelection (first, last);
+        punchStartBeat = (double) (first - 1) * barLen;
+        punchEndBeat = (double) last * barLen;
+    }
+
     // Sweep state: the clock may freeze at a barline mid-block and resume on a
     // trigger later in the same block. frozenBeat tracks the freeze point.
     double frozenBeat = blockStartBeat;
@@ -557,7 +633,8 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 // the downbeat of the pending bar - no bar is skipped and no
                 // waiting time leaks into the take (§11).
                 const double B = (double) (barGate.getCurrentBar() - 1) * barLen;
-                performance.addEvent (m, B, wallSecsFor (B), barGate.getCurrentBar());
+                if (! punchMode || (B >= punchStartBeat && B < punchEndBeat))
+                    performance.addEvent (m, B, wallSecsFor (B), barGate.getCurrentBar());
                 resumedThisBlock = true;
                 resumeSample = in.sample;
                 resumeBeat = B;
@@ -573,8 +650,9 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             {
                 // Closers (note-offs, CC, ...) must still be captured at the
                 // frozen beat so notes held across the barline can't stick.
-                performance.addEvent (m, frozenBeat, wallSecsFor (frozenBeat),
-                                      juce::jmax (1, barGate.getCurrentBar() - 1));
+                if (! punchMode || (frozenBeat >= punchStartBeat && frozenBeat <= punchEndBeat))
+                    performance.addEvent (m, frozenBeat, wallSecsFor (frozenBeat),
+                                          juce::jmax (1, barGate.getCurrentBar() - 1));
             }
             continue;
         }
@@ -595,7 +673,8 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             if (barGate.handleMidiTrigger (m))
             {
                 const double B = adv.boundaryBeat;
-                performance.addEvent (m, B, wallSecsFor (B), barGate.getCurrentBar());
+                if (! punchMode || (B >= punchStartBeat && B < punchEndBeat))
+                    performance.addEvent (m, B, wallSecsFor (B), barGate.getCurrentBar());
                 resumedThisBlock = true;
                 resumeSample = in.sample;
                 resumeBeat = B;
@@ -608,13 +687,15 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             }
             else
             {
-                performance.addEvent (m, frozenBeat, wallSecsFor (frozenBeat),
-                                      juce::jmax (1, barGate.getCurrentBar() - 1));
+                if (! punchMode || (frozenBeat >= punchStartBeat && frozenBeat <= punchEndBeat))
+                    performance.addEvent (m, frozenBeat, wallSecsFor (frozenBeat),
+                                          juce::jmax (1, barGate.getCurrentBar() - 1));
             }
             continue;
         }
 
-        performance.addEvent (m, eb, wallSecsFor (eb), barIndexFor (eb));
+        if (! punchMode || (eb >= punchStartBeat && eb < punchEndBeat))
+            performance.addEvent (m, eb, wallSecsFor (eb), barIndexFor (eb));
     }
 
     //--- finalize the recording clock ----------------------------------------------
@@ -651,7 +732,7 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
         emitClicksForRange (prevClickCursor, clickCursor, midiMessages, numSamples, blockStartAbs);
 
-        if (inCountIn && clickCursor >= 0.0)
+        if (inCountIn && clickCursor >= countInTargetBeat)
         {
             inCountIn = false;
             recordBeat = clickCursor; // keep click grid aligned with recorded beats

@@ -46,6 +46,16 @@ public:
         waiting = false;
     }
 
+    // Start (or resume) the take at a given bar instead of the top - used by
+    // "record from selected bar". Bar numbering stays absolute.
+    void jumpToBar (int bar) noexcept
+    {
+        currentBar = juce::jmax (1, bar);
+        barStartBeat = (double) (currentBar - 1) * getBarLengthBeats();
+        state = State::Recording;
+        waiting = false;
+    }
+
     void stop() noexcept
     {
         state = State::Idle;

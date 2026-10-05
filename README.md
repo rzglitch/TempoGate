@@ -120,5 +120,10 @@ tests/
   continuous playing is never chopped.
 - While waiting, non-trigger note-ons sound live but are not captured;
   note-offs/CCs are captured at the frozen beat so takes can't stick.
+- Take modes on RECORD (`Take:` selector): **Replace All** (fresh take),
+  **Overdub** (layer onto the existing take from the top), **Punch Bars**
+  (wipe only the selected bars and capture solely inside that range).
+- `From Bar` checkbox: start the take at the selected bar instead of the top
+  (absolute bar numbers preserved; combines with all take modes and count-in).
 - Every drag re-exports a fresh temp `.mid`; drag and file-save share the
   same `ExportRenderer`, so both paths can never diverge.

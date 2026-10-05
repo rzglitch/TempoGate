@@ -68,6 +68,8 @@ public:
     int    getExportSource() const;   // 0 = Converted (default), 1 = Original, 2 = Selection
     int    getViewMode() const;       // 0 = Original, 1 = Converted, 2 = Compare
     bool   getMidiThru() const;
+    int    getRecordMode() const;     // 0 = Replace All, 1 = Overdub, 2 = Punch Bars
+    bool   getStartFromBar() const;   // start recording at the selected bar
 
     // Metronome (MIDI click at source tempo while recording)
     bool   getMetroOn() const;
@@ -138,6 +140,7 @@ private:
 
     // metronome / count-in (SOURCE beats; cursor runs negative during pre-roll)
     bool inCountIn = false;
+    double countInTargetBeat = 0.0; // beat at which the pre-roll ends
     double clickCursor = 0.0;
     long long lastEmittedClickBeat = -1;
     int64_t absSampleCounter = 0;

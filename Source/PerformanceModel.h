@@ -133,6 +133,25 @@ public:
         for (auto& e : events) e.selected = false;
     }
 
+    // Erase every event whose bar lies in [first, last] (1-based, inclusive).
+    // Used by punch-in recording: the selected bars are wiped, all other
+    // bars (with their absolute bar numbers) are preserved.
+    void removeBars (int first, int last)
+    {
+        const juce::ScopedLock sl (lock);
+        first = juce::jmax (1, first);
+        last = juce::jmax (first, last);
+        std::vector<PerfEvent> kept;
+        kept.reserve (events.size());
+        for (auto& e : events)
+            if (e.barIndex < first || e.barIndex > last)
+                kept.push_back (e);
+        events.swap (kept);
+        totalBeats = 0.0;
+        for (auto& e : events)
+            totalBeats = juce::jmax (totalBeats, e.sourceBeat);
+    }
+
     // Filtered views -----------------------------------------------------------
     // Full performance in beat order.
     juce::Array<PerfEvent> getAll() const { return snapshot(); }

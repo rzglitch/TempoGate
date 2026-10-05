@@ -171,6 +171,18 @@ TempoGateAudioProcessorEditor::TempoGateAudioProcessorEditor (TempoGateAudioProc
     compareViewButton.onClick = [this]
     { if (auto* par = audioProcessor.apvts.getParameter ("viewMode")) par->setValueNotifyingHost (1.0f); updateViewButtons(); };
 
+    takeLabel.setText ("Take:", juce::dontSendNotification);
+    takeLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    takeLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa0a8));
+    takeLabel.setJustificationType (juce::Justification::right);
+    addAndMakeVisible (takeLabel);
+
+    takeBox.addItemList ({ "Replace All", "Overdub", "Punch Bars" }, 1);
+    takeBox.setSelectedId (1, juce::dontSendNotification);
+    addAndMakeVisible (takeBox);
+    takeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        audioProcessor.apvts, "recordMode", takeBox);
+
     recordButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff8c2b2b));
     recordButton.onClick = [this] { audioProcessor.startRecording(); refreshAll (true); };
     addAndMakeVisible (recordButton);
@@ -214,6 +226,11 @@ TempoGateAudioProcessorEditor::TempoGateAudioProcessorEditor (TempoGateAudioProc
     };
     selFirstSlider.onValueChange = selChanged;
     selLastSlider.onValueChange = selChanged;
+
+    fromBarButton.setTooltip ("When on, RECORD starts at the selected bar instead of the top");
+    addAndMakeVisible (fromBarButton);
+    fromBarAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        audioProcessor.apvts, "startFromBar", fromBarButton);
 
     //---- export ------------------------------------------------------------------------
     exportLabel.setText ("EXPORT  (default: Converted -> Project Tempo)", juce::dontSendNotification);
@@ -366,7 +383,9 @@ void TempoGateAudioProcessorEditor::refreshAll (bool force)
     if ((int) selFirstSlider.getValue() != sf && ! selFirstSlider.isMouseButtonDown())
         selFirstSlider.setValue ((double) sf, juce::dontSendNotification);
 
-    selectionLabel.setText ("Selection: Bar " + juce::String (sf) + "-" + juce::String (sl)
+    juce::String selPrefix = (audioProcessor.getRecordMode() == 2 ? "Punch - " : "");
+    selectionLabel.setText (selPrefix
+                            + "Selection: Bar " + juce::String (sf) + "-" + juce::String (sl)
                             + "  |  " + juce::String (count) + " events",
                             juce::dontSendNotification);
 
@@ -544,24 +563,31 @@ void TempoGateAudioProcessorEditor::resized()
     metroBeatSlider.setBounds (area.getX() + 714, y, 130, 22);
     y += 26;
 
-    // workspace controls row
+    // workspace controls row (cursor layout, must fit area width)
     const int wsY = 218;
-    originalViewButton.setBounds (area.getX(), wsY, 110, 24);
-    convertedViewButton.setBounds (area.getX() + 116, wsY, 110, 24);
-    compareViewButton.setBounds (area.getX() + 232, wsY, 110, 24);
-    triggerBox.setBounds (area.getX() + 352, wsY, 190, 24);
-    recordButton.setBounds (area.getX() + 552, wsY, 110, 24);
-    stopButton.setBounds (area.getX() + 668, wsY, 90, 24);
-    playButton.setBounds (area.getX() + 764, wsY, 130, 24);
+    int cx = area.getX();
+    const int gap = 6;
+    auto place = [&] (juce::Component& c, int w)
+    { c.setBounds (cx, wsY, w, 24); cx += w + gap; };
+    place (originalViewButton, 92);
+    place (convertedViewButton, 92);
+    place (compareViewButton, 92);
+    place (triggerBox, 156);
+    place (takeLabel, 40);
+    place (takeBox, 112);
+    place (recordButton, 100);
+    place (stopButton, 80);
+    playButton.setBounds (cx, wsY, area.getRight() - cx, 24);
 
     sourceRoll.setBounds (area.getX(), wsY + 30, area.getWidth(), 150);
     resultRoll.setBounds (area.getX(), wsY + 186, area.getWidth(), 150);
 
     // selection row
     const int selY = 566;
-    selectionLabel.setBounds (area.getX(), selY, 320, 22);
-    selFirstSlider.setBounds (area.getX() + 330, selY, 260, 22);
-    selLastSlider.setBounds (area.getX() + 600, selY, 260, 22);
+    selectionLabel.setBounds (area.getX(), selY, 270, 22);
+    selFirstSlider.setBounds (area.getX() + 276, selY, 235, 22);
+    selLastSlider.setBounds (area.getX() + 517, selY, 235, 22);
+    fromBarButton.setBounds (area.getX() + 758, selY, 110, 22);
 
     // export row
     const int exY = 612;

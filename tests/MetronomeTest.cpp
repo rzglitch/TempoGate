@@ -294,6 +294,235 @@ int main()
         proc.stopRecording();
     }
 
+    //---- Test 7: replace-all wipes the take -----------------------------------------
+    {
+        TempoGateAudioProcessor proc;
+        proc.prepareToPlay (sr, block);
+        setParam (proc, "sourceTempo", (float) tempo);
+        setParam (proc, "followHost", 0.0f);
+        setParam (proc, "metroOn", 0.0f);
+        setParam (proc, "countIn", 0.0f);
+        setParam (proc, "waitForTrigger", 0.0f);
+        setParam (proc, "recordMode", 0.0f); // Replace All
+        proc.startRecording();
+
+        int64_t absS = 0;
+        auto sparse = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b % 5 == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 50, sr, block, tempo, absS, sparse);
+        proc.stopRecording();
+        check (proc.getPerformance().size() == 10, "take 1 captured 10 notes");
+
+        proc.startRecording(); // replace
+        check (proc.getPerformance().size() == 0, "replace-all wipes on re-record");
+        auto single = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 10, sr, block, tempo, absS, single);
+        proc.stopRecording();
+        check (proc.getPerformance().size() == 1, "fresh take records from scratch");
+    }
+
+    //---- Test 8: overdub layers onto the existing take ---------------------------
+    {
+        TempoGateAudioProcessor proc;
+        proc.prepareToPlay (sr, block);
+        setParam (proc, "sourceTempo", (float) tempo);
+        setParam (proc, "followHost", 0.0f);
+        setParam (proc, "metroOn", 0.0f);
+        setParam (proc, "countIn", 0.0f);
+        setParam (proc, "waitForTrigger", 0.0f);
+        setParam (proc, "recordMode", 0.0f);
+        proc.startRecording();
+
+        int64_t absS = 0;
+        auto sparse = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b % 5 == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 50, sr, block, tempo, absS, sparse);
+        proc.stopRecording();
+        check (proc.getPerformance().size() == 10, "take 1 captured 10 notes");
+
+        setParam (proc, "recordMode", 1.0f); // Overdub
+        proc.startRecording();
+        check (proc.getPerformance().size() == 10, "overdub preserves existing data");
+        runBlocks (proc, 50, sr, block, tempo, absS, sparse);
+        proc.stopRecording();
+        check (proc.getPerformance().size() == 20, "overdub pass layered 10 more notes");
+    }
+
+    //---- Test 9: punch bars wipes + re-records only the range --------------------
+    {
+        TempoGateAudioProcessor proc;
+        proc.prepareToPlay (sr, block);
+        setParam (proc, "sourceTempo", (float) tempo);
+        setParam (proc, "followHost", 0.0f);
+        setParam (proc, "metroOn", 0.0f);
+        setParam (proc, "countIn", 0.0f);
+        setParam (proc, "waitForTrigger", 0.0f);
+        proc.startRecording();
+
+        int64_t absS = 0;
+        auto take1 = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b % 10 == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 200, sr, block, tempo, absS, take1); // beats 0..4.6
+        proc.stopRecording();
+
+        int bar1 = 0, bar2 = 0;
+        {
+            auto snap = proc.getPerformance().snapshot();
+            for (auto& e : snap)
+                if (e.message.isNoteOn() && e.message.getNoteNumber() == 60)
+                    (e.barIndex == 1 ? bar1 : bar2)++;
+        }
+        check (bar1 == 18 && bar2 == 2, "take 1 spans bars 1-2 (18 + 2 notes)");
+
+        setParam (proc, "recordMode", 2.0f); // Punch Bars
+        proc.getPerformance().setSelectedBarRange (2, 2);
+        proc.startRecording();
+        check (proc.getPerformance().size() == 18, "punch wiped only bar 2");
+        {
+            auto snap = proc.getPerformance().snapshot();
+            bool allBar1 = true;
+            for (auto& e : snap)
+                if (e.barIndex != 1) allBar1 = false;
+            check (allBar1, "bar 1 untouched by punch wipe");
+        }
+
+        auto pass2 = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b == 5) // beat ~0.12, outside punch range [4, 8): skipped
+                mb.addEvent (juce::MidiMessage::noteOn (1, 62, (juce::uint8) 100), 0);
+            if (b == 200) // beat ~4.64, inside: captured
+                mb.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 250, sr, block, tempo, absS, pass2);
+        proc.stopRecording();
+
+        check (proc.getPerformance().size() == 19, "punch pass added exactly 1 in-range note");
+        {
+            auto snap = proc.getPerformance().snapshot();
+            bool saw62 = false, saw64inRange = false;
+            for (auto& e : snap)
+            {
+                if (e.message.isNoteOn() && e.message.getNoteNumber() == 62) saw62 = true;
+                if (e.message.isNoteOn() && e.message.getNoteNumber() == 64
+                    && std::abs (e.sourceBeat - 200.0 * beatsPerBlock) < 0.05
+                    && e.barIndex == 2)
+                    saw64inRange = true;
+            }
+            check (! saw62, "out-of-range punch note ignored");
+            check (saw64inRange, "in-range punch note captured in bar 2");
+        }
+    }
+
+    //---- Test 10: record from the selected bar --------------------------------------
+    {
+        TempoGateAudioProcessor proc;
+        proc.prepareToPlay (sr, block);
+        setParam (proc, "sourceTempo", (float) tempo);
+        setParam (proc, "followHost", 0.0f);
+        setParam (proc, "metroOn", 0.0f);
+        setParam (proc, "countIn", 0.0f);
+        setParam (proc, "waitForTrigger", 0.0f);
+        setParam (proc, "recordMode", 0.0f); // Replace All
+        setParam (proc, "startFromBar", 1.0f);
+        proc.getPerformance().setSelectedBarRange (3, 4);
+        proc.startRecording();
+
+        check (std::abs (proc.getRecordBeat() - 8.0) < 1e-9, "clock starts at bar 3 (beat 8.0)");
+        check (proc.getBarGate().getCurrentBar() == 3, "gate starts at bar 3");
+
+        int64_t absS = 0;
+        auto single = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 10, sr, block, tempo, absS, single);
+        proc.stopRecording();
+
+        check (proc.getPerformance().size() == 1, "note captured from bar 3");
+        {
+            auto snap = proc.getPerformance().snapshot();
+            const auto& e = snap.getReference (0);
+            check (std::abs (e.sourceBeat - 8.0) < 1e-9 && e.barIndex == 3,
+                   "note recorded at 8.0 with bar index 3");
+        }
+    }
+
+    //---- Test 11: from-selection + punch bars combined ------------------------------
+    {
+        TempoGateAudioProcessor proc;
+        proc.prepareToPlay (sr, block);
+        setParam (proc, "sourceTempo", (float) tempo);
+        setParam (proc, "followHost", 0.0f);
+        setParam (proc, "metroOn", 0.0f);
+        setParam (proc, "countIn", 0.0f);
+        setParam (proc, "waitForTrigger", 0.0f);
+        proc.startRecording();
+
+        int64_t absS = 0;
+        auto take1 = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b % 10 == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 200, sr, block, tempo, absS, take1); // bars 1-2
+        proc.stopRecording();
+        check (proc.getPerformance().size() == 20, "take 1 has 20 notes");
+
+        setParam (proc, "recordMode", 2.0f); // Punch Bars
+        setParam (proc, "startFromBar", 1.0f);
+        proc.getPerformance().setSelectedBarRange (2, 2);
+        proc.startRecording();
+
+        check (proc.getPerformance().size() == 18, "punch wiped bar 2");
+        check (std::abs (proc.getRecordBeat() - 4.0) < 1e-9, "take starts at bar 2");
+        check (proc.getBarGate().getCurrentBar() == 2, "gate starts at bar 2");
+
+        auto repass = [] (int b, juce::MidiBuffer& mb)
+        {
+            if (b == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100), 0);
+        };
+        runBlocks (proc, 10, sr, block, tempo, absS, repass);
+        proc.stopRecording();
+
+        check (proc.getPerformance().size() == 19, "re-recorded bar 2 on top of bar 1");
+        {
+            auto snap = proc.getPerformance().snapshot();
+            bool found = false;
+            for (auto& e : snap)
+                if (e.message.isNoteOn() && e.message.getNoteNumber() == 64
+                    && std::abs (e.sourceBeat - 4.0) < 1e-9 && e.barIndex == 2)
+                    found = true;
+            check (found, "new note captured at 4.0 in bar 2");
+        }
+    }
+
+    //---- Test 12: from-bar without selection falls back to the top ------------------
+    {
+        TempoGateAudioProcessor proc;
+        proc.prepareToPlay (sr, block);
+        setParam (proc, "sourceTempo", (float) tempo);
+        setParam (proc, "startFromBar", 1.0f); // on, but no selection exists
+        proc.startRecording();
+        check (std::abs (proc.getRecordBeat() - 0.0) < 1e-9, "no selection -> start at top");
+        check (proc.getBarGate().getCurrentBar() == 1, "gate at bar 1");
+        proc.stopRecording();
+    }
+
     if (failures == 0) std::printf ("\nALL METRONOME TESTS PASSED\n");
     else               std::printf ("\n%d METRONOME TEST(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;
