@@ -17,7 +17,14 @@ project (TempoGate VERSION 1.0.0 LANGUAGES C CXX)
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
-set (CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+
+if (APPLE)
+    set (CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif ()
+
+# MSVC interprets sources in the system code page unless told otherwise;
+# enforce UTF-8 so string literals and comments behave identically everywhere.
+add_compile_options ($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 set (JUCE_DIR "$ENV{HOME}/JUCE" CACHE PATH "JUCE framework source root")
 if (NOT EXISTS "${JUCE_DIR}/CMakeLists.txt")
@@ -27,10 +34,22 @@ endif ()
 add_subdirectory ("${JUCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
 
 # ------------------------------------------------------------------------------
+# Plugin formats per platform. AU exists only on Apple platforms; Windows gets
+# VST3 plus Standalone for DAW-less smoke testing.
+if (APPLE)
+    set (TEMPOGATE_PLUGIN_FORMATS AU VST3 Standalone)
+else ()
+    set (TEMPOGATE_PLUGIN_FORMATS VST3 Standalone)
+endif ()
+
+# Copying the VST3 into the system plug-in folder needs elevation on Windows,
+# so it is opt-out-able (pass -DTEMPOGATE_COPY_PLUGIN_AFTER_BUILD=OFF).
+option (TEMPOGATE_COPY_PLUGIN_AFTER_BUILD "Copy plug-ins to the system folder after build" ON)
+
 juce_add_plugin (TempoGate
-    COMPANY_NAME "TempoGate"
-    BUNDLE_ID com.tempogate.TempoGate
-    PLUGIN_MANUFACTURER_CODE Manu
+    COMPANY_NAME "kh"
+    BUNDLE_ID kr.me.kh.TempoGate
+    PLUGIN_MANUFACTURER_CODE Rzgl
     PLUGIN_CODE Gzlb
 
     IS_SYNTH TRUE
@@ -39,7 +58,7 @@ juce_add_plugin (TempoGate
     IS_MIDI_EFFECT TRUE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
 
-    FORMATS AU VST3 Standalone
+    FORMATS ${TEMPOGATE_PLUGIN_FORMATS}
     PRODUCT_NAME "TempoGate"
 
     # NOTE (Cubase): IS_SYNTH makes JUCE emit the VST3 "Instrument"
@@ -51,7 +70,7 @@ juce_add_plugin (TempoGate
     # AU type intentionally unset: JUCE 9 defaults MIDI effects to
     # kAudioUnitType_MIDIProcessor ('aumf', Logic MIDI FX).
 
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    COPY_PLUGIN_AFTER_BUILD ${TEMPOGATE_COPY_PLUGIN_AFTER_BUILD}
 )
 
 # Back-compat for sources including <JuceHeader.h> (Projucer-style).
