@@ -99,6 +99,13 @@ TempoGateAudioProcessor::TempoGateAudioProcessor()
 
 TempoGateAudioProcessor::~TempoGateAudioProcessor()
 {
+#ifdef TEMPOGATE_TAKE_LOG
+    if (takeLogFile != nullptr)
+    {
+        std::fclose (takeLogFile);
+        takeLogFile = nullptr;
+    }
+#endif
 }
 
 //==============================================================================
@@ -237,6 +244,89 @@ void TempoGateAudioProcessor::setCurrentProgram (int) {}
 const juce::String TempoGateAudioProcessor::getProgramName (int) { return {}; }
 void TempoGateAudioProcessor::changeProgramName (int, const juce::String&) {}
 
+void TempoGateAudioProcessor::logTakeLine (const char* kind, const juce::MidiMessage& m,
+                                              double beat, int samplePos, int bar)
+{
+#ifdef TEMPOGATE_TAKE_LOG
+    if (takeLogFile == nullptr)
+        return;
+    const char* type = m.isNoteOn() ? "on" : (m.isNoteOff() ? "off" : "other");
+    std::fprintf (takeLogFile, "E blk=%d kind=%s type=%s ch=%d n=%d v=%d samp=%d beat=%.5f bar=%d\n",
+                  takeLogBlock, kind, type, m.getChannel(), m.getNoteNumber(),
+                  (int) m.getVelocity(), samplePos, beat, bar);
+    std::fflush (takeLogFile);
+#else
+    (void) kind; (void) m; (void) beat; (void) samplePos; (void) bar;
+#endif
+}
+
+void TempoGateAudioProcessor::logTakeBlock (int64_t absSample, int numSamples, bool playing,
+                                            double hostBpm, double hostPpq, double liveDelta,
+                                            double recBefore, double recAfter)
+{
+#ifdef TEMPOGATE_TAKE_LOG
+    if (takeLogFile == nullptr)
+        return;
+    std::fprintf (takeLogFile,
+                  "B blk=%d abs=%lld ns=%d playing=%d bpm=%.3f ppq=%.5f live=%.5f rec=%.5f->%.5f gate=%s bar=%d wait=%d cap=%d\n",
+                  takeLogBlock, (long long) absSample, numSamples, playing ? 1 : 0,
+                  hostBpm, hostPpq, liveDelta, recBefore, recAfter,
+                  tempogate::BarGate::stateToString (barGate.getState()).toRawUTF8 (),
+                  barGate.getCurrentBar(), barGate.isWaiting() ? 1 : 0,
+                  (recording && ! inCountIn) ? 1 : 0);
+    std::fflush (takeLogFile);
+    ++takeLogBlock;
+#else
+    (void) absSample; (void) numSamples; (void) playing; (void) hostBpm;
+    (void) hostPpq; (void) liveDelta; (void) recBefore; (void) recAfter;
+#endif
+}
+
+int TempoGateAudioProcessor::getInputHealth() const
+{
+    if (healthInversions.load() > 0 || healthZeroLen.load() > 0 || healthStalls.load() > 0)
+        return 1; // UNSTABLE
+    return 0; // OK
+}
+
+juce::String TempoGateAudioProcessor::getInputHealthText() const
+{
+    if (getInputHealth() == 0)
+        return "OK";
+    return "UNSTABLE (inv=" + juce::String (getHealthInversions())
+         + " zero=" + juce::String (getHealthZeroLen())
+         + " stall=" + juce::String (getHealthStalls()) + ")";
+}
+
+void TempoGateAudioProcessor::scanTakeHealth()
+{
+    healthZeroLen = 0;
+    auto evts = performance.snapshot();
+    std::sort (evts.begin(), evts.end(),
+               [] (const tempogate::PerfEvent& a, const tempogate::PerfEvent& b)
+               { return a.sourceBeat < b.sourceBeat; });
+    std::map<int, double> open; // (channel*128+pitch) -> on beat
+    for (auto& e : evts)
+    {
+        const auto& m = e.message;
+        if (! (m.isNoteOn() || m.isNoteOff()))
+            continue;
+        const int key = m.getChannel() * 128 + m.getNoteNumber();
+        if (m.isNoteOn())
+            open[key] = e.sourceBeat;
+        else
+        {
+            auto it = open.find (key);
+            if (it != open.end())
+            {
+                if (e.sourceBeat <= it->second + 0.001)
+                    ++healthZeroLen;
+                open.erase (it);
+            }
+        }
+    }
+}
+
 //==============================================================================
 void TempoGateAudioProcessor::prepareToPlay (double sampleRate, int)
 {
@@ -302,6 +392,13 @@ void TempoGateAudioProcessor::startRecording()
     gateWasWaiting = false;
     pendingClickOffs.clear();
 
+    // Fresh take-health state.
+    healthInversions = 0;
+    healthZeroLen = 0;
+    healthStalls = 0;
+    lastRecordedEb = -1.0e9;
+    lastBlockWallMs = juce::Time::getMillisecondCounterHiRes();
+
     // Count-in pre-roll: the click cursor runs before the start beat and
     // recording of incoming MIDI starts once it reaches it.
     const double preRoll = (double) getCountInBars() * barGate.getBarLengthBeats();
@@ -313,14 +410,50 @@ void TempoGateAudioProcessor::startRecording()
     recording = true;
     stopPlayback();
     sendChangeMessage();
+
+#ifdef TEMPOGATE_TAKE_LOG
+    {
+        // Deterministic location (home dir): tempDirectory varies per host
+        // context (app-named subfolders), which buries the file.
+        auto logFile = juce::File::getSpecialLocation (
+            juce::File::SpecialLocationType::userHomeDirectory).getChildFile ("tempogate_take.log");
+        takeLogFile = std::fopen (logFile.getFullPathName().toRawUTF8(), "w");
+        takeLogBlock = 0;
+        if (takeLogFile != nullptr)
+        {
+            std::fprintf (takeLogFile,
+                          "# TempoGate take log v1 file=%s\n"
+                          "# start mode=%d fromBar=%d gate=%d trigger=%d countIn=%d metro=%d src=%.2f proj=%.2f follow=%d barLen=%.3f startBeat=%.3f\n",
+                          logFile.getFullPathName().toRawUTF8 (),
+                          getRecordMode(), getStartFromBar() ? 1 : 0,
+                          barGate.getWaitForTrigger() ? 1 : 0, barGate.getTriggerMode(),
+                          getCountInBars(), getMetroOn() ? 1 : 0,
+                          tempoEngine.getSourceTempo(), tempoEngine.getProjectTempo(),
+                          getFollowHost() ? 1 : 0,
+                          barGate.getBarLengthBeats(), startBeat);
+            std::fflush (takeLogFile);
+        }
+    }
+#endif
 }
 
 void TempoGateAudioProcessor::stopRecording()
 {
     recording = false;
     inCountIn = false;
+#ifdef TEMPOGATE_TAKE_LOG
+    if (takeLogFile != nullptr)
+    {
+        std::fprintf (takeLogFile, "# stop events=%d recBeat=%.5f inv=%d zero=%d stall=%d\n",
+                      performance.size(), recordBeat,
+                      getHealthInversions(), getHealthZeroLen(), getHealthStalls());
+        std::fclose (takeLogFile);
+        takeLogFile = nullptr;
+    }
+#endif
     barGate.stop();
     performance.selectAllBars (barGate.getBarLengthBeats());
+    scanTakeHealth();
     sendChangeMessage();
 }
 
@@ -378,6 +511,9 @@ void TempoGateAudioProcessor::commitToDaw()
 void TempoGateAudioProcessor::clearPerformance()
 {
     performance.clear();
+    healthInversions = 0;
+    healthZeroLen = 0;
+    healthStalls = 0;
     stopPlayback();
     sendChangeMessage();
 }
@@ -567,8 +703,18 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     {
         if (playing && hostPpq >= 0.0 && lastHostPpq >= 0.0)
         {
-            double projectDelta = juce::jmax (0.0, hostPpq - lastHostPpq);
-            liveDelta = projectDelta * sourceTempo / juce::jmax (1.0, projectTempo);
+            if (hostPpq < lastHostPpq - 1e-9)
+            {
+                // Transport looped or jumped back: keep the take clock on
+                // wall time for this block instead of freezing it (which
+                // would pile the block's events onto one beat).
+                liveDelta = blockSeconds * sourceTempo / 60.0;
+            }
+            else
+            {
+                const double projectDelta = hostPpq - lastHostPpq; // >= 0 here
+                liveDelta = projectDelta * sourceTempo / juce::jmax (1.0, projectTempo);
+            }
         }
         else
         {
@@ -576,6 +722,18 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         }
     }
     if (playing && hostPpq >= 0.0) lastHostPpq = hostPpq;
+
+    // Take-health: audio-callback stall detection. A wall gap far beyond the
+    // nominal block cadence means blocks (and their MIDI timing) slipped.
+    if (recording)
+    {
+        const double nowWallMs = juce::Time::getMillisecondCounterHiRes();
+        const double blockMs = (currentSampleRate > 0.0 && numSamples > 0)
+                                   ? ((double) numSamples / currentSampleRate * 1000.0) : 11.6;
+        if (nowWallMs - lastBlockWallMs > juce::jmax (100.0, blockMs * 4.0))
+            ++healthStalls;
+        lastBlockWallMs = nowWallMs;
+    }
 
     // No MIDI is captured during the count-in pre-roll; the click runs alone
     // and the gate is untouched until the pre-roll ends.
@@ -621,7 +779,10 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             midiMessages.addEvent (m, in.sample);
 
         if (! captureThisBlock)
+        {
+            logTakeLine ("skip-countin", m, -1.0, in.sample, -1);
             continue;
+        }
 
         //--- gate waiting: this event can only release the gate -----------------
         // The clock is frozen at frozenBeat (== recordBeat, the barline).
@@ -634,7 +795,13 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 // waiting time leaks into the take (§11).
                 const double B = (double) (barGate.getCurrentBar() - 1) * barLen;
                 if (! punchMode || (B >= punchStartBeat && B < punchEndBeat))
+                {
                     performance.addEvent (m, B, wallSecsFor (B), barGate.getCurrentBar());
+                    trackRecordedBeat (B);
+                    logTakeLine ("trig-wait", m, B, in.sample, barGate.getCurrentBar());
+                }
+                else
+                    logTakeLine ("skip-punch", m, B, in.sample, barGate.getCurrentBar());
                 resumedThisBlock = true;
                 resumeSample = in.sample;
                 resumeBeat = B;
@@ -645,14 +812,24 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             {
                 // Noodling while waiting: heard live (thru above), not captured.
                 // Only the trigger starts the bar.
+                logTakeLine ("skip-wait-note", m, frozenBeat, in.sample,
+                              barGate.getCurrentBar());
             }
             else
             {
                 // Closers (note-offs, CC, ...) must still be captured at the
                 // frozen beat so notes held across the barline can't stick.
                 if (! punchMode || (frozenBeat >= punchStartBeat && frozenBeat <= punchEndBeat))
+                {
                     performance.addEvent (m, frozenBeat, wallSecsFor (frozenBeat),
                                           juce::jmax (1, barGate.getCurrentBar() - 1));
+                    trackRecordedBeat (frozenBeat);
+                    logTakeLine ("closer", m, frozenBeat, in.sample,
+                                  juce::jmax (1, barGate.getCurrentBar() - 1));
+                }
+                else
+                    logTakeLine ("skip-punch", m, frozenBeat, in.sample,
+                                  juce::jmax (1, barGate.getCurrentBar() - 1));
             }
             continue;
         }
@@ -674,7 +851,13 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             {
                 const double B = adv.boundaryBeat;
                 if (! punchMode || (B >= punchStartBeat && B < punchEndBeat))
+                {
                     performance.addEvent (m, B, wallSecsFor (B), barGate.getCurrentBar());
+                    trackRecordedBeat (B);
+                    logTakeLine ("trig-bound", m, B, in.sample, barGate.getCurrentBar());
+                }
+                else
+                    logTakeLine ("skip-punch", m, B, in.sample, barGate.getCurrentBar());
                 resumedThisBlock = true;
                 resumeSample = in.sample;
                 resumeBeat = B;
@@ -688,14 +871,28 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             else
             {
                 if (! punchMode || (frozenBeat >= punchStartBeat && frozenBeat <= punchEndBeat))
+                {
                     performance.addEvent (m, frozenBeat, wallSecsFor (frozenBeat),
                                           juce::jmax (1, barGate.getCurrentBar() - 1));
+                    trackRecordedBeat (frozenBeat);
+                    logTakeLine ("closer", m, frozenBeat, in.sample,
+                                  juce::jmax (1, barGate.getCurrentBar() - 1));
+                }
+                else
+                    logTakeLine ("skip-punch", m, frozenBeat, in.sample,
+                                  juce::jmax (1, barGate.getCurrentBar() - 1));
             }
             continue;
         }
 
         if (! punchMode || (eb >= punchStartBeat && eb < punchEndBeat))
+        {
             performance.addEvent (m, eb, wallSecsFor (eb), barIndexFor (eb));
+            trackRecordedBeat (eb);
+            logTakeLine ("norm", m, eb, in.sample, barIndexFor (eb));
+        }
+        else
+            logTakeLine ("skip-punch", m, eb, in.sample, barIndexFor (eb));
     }
 
     //--- finalize the recording clock ----------------------------------------------
@@ -723,6 +920,11 @@ void TempoGateAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     }
 
     //---- metronome + count-in transition (same source-tempo clock) -----------------
+#ifdef TEMPOGATE_TAKE_LOG
+    if (recording)
+        logTakeBlock (blockStartAbs, numSamples, playing, hostBpm, hostPpq,
+                      liveDelta, blockStartBeat, recordBeat);
+#endif
     if (recording)
     {
         if (inCountIn)

@@ -15,7 +15,8 @@ TempoGateAudioProcessorEditor::TempoGateAudioProcessorEditor (TempoGateAudioProc
     setWantsKeyboardFocus (false);
 
     //---- header -----------------------------------------------------------------
-    titleLabel.setText ("TEMPOGATE MIDI - MIDI Performance Workspace", juce::dontSendNotification);
+    titleLabel.setText ("TEMPOGATE MIDI " + juce::String (ProjectInfo::versionString) + " - MIDI Performance Workspace",
+                        juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (17.0f, juce::Font::bold));
     titleLabel.setColour (juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible (titleLabel);
@@ -232,6 +233,11 @@ TempoGateAudioProcessorEditor::TempoGateAudioProcessorEditor (TempoGateAudioProc
     fromBarAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         audioProcessor.apvts, "startFromBar", fromBarButton);
 
+    healthLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    healthLabel.setJustificationType (juce::Justification::right);
+    healthLabel.setTooltip ("Take input timing: order inversions / zero-length notes / audio-callback stalls seen while recording");
+    addAndMakeVisible (healthLabel);
+
     //---- export ------------------------------------------------------------------------
     exportLabel.setText ("EXPORT  (default: Converted -> Project Tempo)", juce::dontSendNotification);
     exportLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
@@ -388,6 +394,29 @@ void TempoGateAudioProcessorEditor::refreshAll (bool force)
                             + "Selection: Bar " + juce::String (sf) + "-" + juce::String (sl)
                             + "  |  " + juce::String (count) + " events",
                             juce::dontSendNotification);
+
+    // Take-health indicator: OK, UNSTABLE with counts, or -- when no take.
+    if (count > 0)
+    {
+        const int h = audioProcessor.getInputHealth();
+        healthLabel.setText ("In: " + audioProcessor.getInputHealthText(),
+                             juce::dontSendNotification);
+        healthLabel.setColour (juce::Label::textColourId,
+                               h == 0 ? juce::Colour (0xff7de08d)
+                                      : juce::Colour (0xffffb84d));
+        healthLabel.setTooltip ("Take input timing: order inversions="
+                                + juce::String (audioProcessor.getHealthInversions())
+                                + " zero-length notes="
+                                + juce::String (audioProcessor.getHealthZeroLen())
+                                + " audio-callback stalls="
+                                + juce::String (audioProcessor.getHealthStalls()));
+    }
+    else
+    {
+        healthLabel.setText ("In: --", juce::dontSendNotification);
+        healthLabel.setColour (juce::Label::textColourId, juce::Colour (0xff6a6f78));
+        healthLabel.setTooltip ("Take input timing: no take recorded yet");
+    }
 
     // piano rolls
     auto evts = audioProcessor.getPerformance().snapshot();
@@ -584,10 +613,11 @@ void TempoGateAudioProcessorEditor::resized()
 
     // selection row
     const int selY = 566;
-    selectionLabel.setBounds (area.getX(), selY, 270, 22);
-    selFirstSlider.setBounds (area.getX() + 276, selY, 235, 22);
-    selLastSlider.setBounds (area.getX() + 517, selY, 235, 22);
-    fromBarButton.setBounds (area.getX() + 758, selY, 110, 22);
+    selectionLabel.setBounds (area.getX(), selY, 250, 22);
+    selFirstSlider.setBounds (area.getX() + 256, selY, 210, 22);
+    selLastSlider.setBounds (area.getX() + 472, selY, 210, 22);
+    fromBarButton.setBounds (area.getX() + 688, selY, 100, 22);
+    healthLabel.setBounds (area.getX() + 794, selY, 110, 22);
 
     // export row
     const int exY = 612;

@@ -127,3 +127,61 @@ tests/
   (absolute bar numbers preserved; combines with all take modes and count-in).
 - Every drag re-exports a fresh temp `.mid`; drag and file-save share the
   same `ExportRenderer`, so both paths can never diverge.
+- Exports always start at the first exported event (leading silence trimmed,
+  intervals preserved): a dropped region starts with content, matching what
+  the workspace shows and what playback plays.
+- Export strips message timestamps before rendering (`withTimeStamp(0.0)`):
+  `MidiMessageSequence::addEvent(msg, t)` *adds* `t` to the message's
+  existing timestamp, and recorded messages carry their block sample offset
+  there (MidiBuffer round-trip). Without stripping, every event shifts by its
+  own offset - non-uniformly, up to a full block, order-changing included.
+  Larger buffers meant larger shifts, which is why small buffers looked
+  "cleaner". Guarded by a nonzero-offset regression test.
+- Take-health indicator (`In:` in the selection row): `OK`, or `UNSTABLE`
+  with counts of order inversions / zero-length notes / audio-callback
+  stalls seen while recording. It tells input-timing trouble apart from
+  take-engine trouble at a glance (details in the tooltip and, for logging
+  builds, in `~/tempogate_take.log`).
+
+## Diagnostic logging build
+
+When a take's timing is suspect and the cause must be attributed to either
+the input stream or the take engine, build with take logging:
+
+```sh
+cmake -S . -B ./Builds/Log -DCMAKE_BUILD_TYPE=Release \
+      -DTEMPOGATE_TAKE_LOG=ON
+cmake --build ./Builds/Log --config Release -j
+```
+
+> **Do not use this build in production**: file I/O on the audio thread can perturb timing under load.
+
+The log holds one `B` line per audio block (transport state, host ppq/bpm,
+clock delta, record-beat window, gate state) and one `E` line per MIDI event
+(`norm` = captured, `trig-*` = gate release, `closer` = frozen-beat closer,
+`skip-*` = not captured with reason). Comparing `samp` (arrival block/offset)
+against `beat` (assigned musical time) separates delivery jitter (arrival
+already late) from clock error (arrival fine, beats wrong) on the spot.
+
+## Recording troubleshooting
+
+TempoGate records exactly what arrives at its MIDI input (verified
+sample-accurate in headless tests covering host-sync, looping transport,
+count-in, bar gate, punch-in and export timelines). If a take's timing looks
+off, check in order:
+
+1. Re-export with the current build first: takes exported before the
+   timestamp-stripping fix carry per-event sample-offset shifts described
+   above (non-uniform, order-changing, magnitude up to one audio block).
+2. No groove/quantize/humanize or MIDI FX on the source track or item.
+3. No transport looping, seeking, or tempo changes during the take.
+4. One audio-device owner: close competing DAWs/apps, or lower the buffer.
+   Virtual MIDI cables (IAC Driver etc.) under CPU load can burst/delay
+   events by hundreds of ms - prefer a direct connection when possible.
+   (Note: with the timestamp fix in place, buffer size no longer affects
+   export timing; it only affects live scheduling robustness.)
+5. Compare against a grid-straight reference file tick-for-tick. Use the
+   `In:` health indicator (UNSTABLE = inversions/zero-length/stalls seen)
+   and, if needed, a logging build (`~/tempogate_take.log` holds per-block
+   clock state and per-event arrival-vs-assigned beats) to attribute any
+   remainder to delivery vs engine on the spot.

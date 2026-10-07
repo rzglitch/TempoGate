@@ -71,6 +71,15 @@ public:
     int    getRecordMode() const;     // 0 = Replace All, 1 = Overdub, 2 = Punch Bars
     bool   getStartFromBar() const;   // start recording at the selected bar
 
+    // Take-health monitor: 0 = OK (or no take), 1 = UNSTABLE. Counts order
+    // inversions, zero-length notes and audio-callback stalls seen while
+    // recording. Cheap enough to run in every build.
+    int getInputHealth() const;
+    int getHealthInversions() const { return healthInversions.load(); }
+    int getHealthZeroLen() const { return healthZeroLen.load(); }
+    int getHealthStalls() const { return healthStalls.load(); }
+    juce::String getInputHealthText() const;
+
     // Metronome (MIDI click at source tempo while recording)
     bool   getMetroOn() const;
     int    getCountInBars() const;    // 0 = off, 1, 2
@@ -141,6 +150,11 @@ private:
     // metronome / count-in (SOURCE beats; cursor runs negative during pre-roll)
     bool inCountIn = false;
     double countInTargetBeat = 0.0; // beat at which the pre-roll ends
+
+    // Event timing source: NOTE - driver wall-timestamps do NOT survive to
+    // processBlock (MidiBuffer keeps only bytes + sample offsets, in every
+    // JUCE path), so all timing uses block/sample mapping. See event input
+    // forensics in the MIDI investigation (2026-10).
     double clickCursor = 0.0;
     long long lastEmittedClickBeat = -1;
     int64_t absSampleCounter = 0;
@@ -149,6 +163,7 @@ private:
 
     // playback / commit scheduler (PROJECT beats)
     struct ScheduledEvent { double beat = 0.0; juce::MidiMessage msg; };
+
     std::vector<ScheduledEvent> playbackQueue;
     size_t playbackIndex = 0;
     bool playbackActive = false;
@@ -159,6 +174,46 @@ private:
     // host tracking (message-thread readable)
     double lastHostTempo = 120.0;
     bool hostIsPlaying = false;
+
+    // Take-health monitor: counts input-timing anomalies seen while recording
+    // (order inversions, zero-length notes at stop, audio-callback stalls).
+    // Counters are atomic (audio thread writes, UI thread reads); the verdict
+    // is derived on demand. Cheap enough to run in every build.
+    std::atomic<int> healthInversions { 0 };
+    std::atomic<int> healthZeroLen { 0 };
+    std::atomic<int> healthStalls { 0 };
+    double lastRecordedEb = -1.0e9; // high-water mark, reset per take
+    double lastBlockWallMs = 0.0;   // previous block wall time (stall detect)
+
+    // Track one recorded beat for inversion detection (audio thread).
+    // Every recorded beat must be >= the take's high-water mark; a beat
+    // arriving earlier means out-of-order delivery.
+    inline void trackRecordedBeat (double eb)
+    {
+        if (eb < lastRecordedEb - 0.001)
+            ++healthInversions;
+        if (eb > lastRecordedEb)
+            lastRecordedEb = eb;
+    }
+
+    // Scan the finished take for zero-length notes (called on stop).
+    void scanTakeHealth();
+
+    // Diagnostic take logging (TEMPOGATE_TAKE_LOG builds only). When enabled,
+    // every recorded/skipped event and per-block clock state is appended to
+    // ~/tempogate_take.log for input-timing forensics. Production
+    // builds compile this out completely (zero overhead, zero behavior
+    // change). NOTE: file I/O on the audio thread can perturb timing under
+    // load - use diagnostic builds for forensics, not performance.
+    void logTakeLine (const char* kind, const juce::MidiMessage& m,
+                      double beat, int samplePos, int bar);
+    void logTakeBlock (int64_t absSample, int numSamples, bool playing,
+                       double hostBpm, double hostPpq, double liveDelta,
+                       double recBefore, double recAfter);
+#ifdef TEMPOGATE_TAKE_LOG
+    FILE* takeLogFile = nullptr;
+    int takeLogBlock = 0;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TempoGateAudioProcessor)
 };

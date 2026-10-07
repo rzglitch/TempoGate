@@ -13,7 +13,7 @@
 
 cmake_minimum_required (VERSION 3.22)
 
-project (TempoGate VERSION 1.0.0 LANGUAGES C CXX)
+project (TempoGate VERSION 1.0.1 LANGUAGES C CXX)
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,11 +46,22 @@ endif ()
 # so it is opt-out-able (pass -DTEMPOGATE_COPY_PLUGIN_AFTER_BUILD=OFF).
 option (TEMPOGATE_COPY_PLUGIN_AFTER_BUILD "Copy plug-ins to the system folder after build" ON)
 
+# Diagnostic take logging: per-block clock state + per-event beats appended to
+# <tempdir>/tempogate_take.log while recording. OFF by default (zero overhead
+# and zero behavior change when off). Build a separate tree with
+# -DTEMPOGATE_TAKE_LOG=ON for input-timing forensics; never ship it enabled
+# (file I/O on the audio thread can perturb timing under load).
+option (TEMPOGATE_TAKE_LOG "Compile in per-block/per-event take logging (diagnostic builds only)" OFF)
+if (TEMPOGATE_TAKE_LOG)
+    add_compile_definitions (TEMPOGATE_TAKE_LOG=1)
+endif ()
+
 juce_add_plugin (TempoGate
     COMPANY_NAME "kh"
     BUNDLE_ID kr.me.kh.TempoGate
     PLUGIN_MANUFACTURER_CODE Rzgl
     PLUGIN_CODE Gzlb
+    VERSION ${PROJECT_VERSION}
 
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE

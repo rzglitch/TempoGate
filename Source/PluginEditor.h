@@ -232,6 +232,7 @@ private:
     juce::Slider selFirstSlider, selLastSlider;
     juce::ToggleButton fromBarButton { "From Bar" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fromBarAtt;
+    juce::Label healthLabel;
 
     // export
     juce::TextButton dragFullButton { "DRAG MIDI TO DAW" };

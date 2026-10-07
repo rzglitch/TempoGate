@@ -44,6 +44,12 @@ public:
     static constexpr int ticksPerQuarterNote = 960;
 
     // Build the export object for the requested scope.
+    //
+    // Exports always start at the first exported event (leading silence is
+    // trimmed, intervals preserved): a dropped region starts with content,
+    // matching what the workspace shows and what playback plays. Timeline
+    // preservation (leading silence kept) is intentionally NOT the default -
+    // it strands gate-wait/from-bar takes behind bars of dead space.
     static MidiExportObject makeFullExport (const PerformanceModel& perf,
                                             MidiExportObject::Source src,
                                             double sourceTempo, double targetTempo,
@@ -86,8 +92,6 @@ public:
         obj.startBar = first;
         if (! obj.selectedEvents.isEmpty())
         {
-            // §11: bars are concatenated - rebase to 0 so the first selected
-            // bar starts at beat 0 in the exported region.
             obj.startBeat = obj.selectedEvents.getReference (0).sourceBeat;
             double mx = obj.startBeat;
             for (auto& e : obj.selectedEvents)
@@ -129,7 +133,8 @@ public:
             track.addEvent (juce::MidiMessage::timeSignatureMetaEvent (
                                 obj.timeSigNum, obj.timeSigDen), 0.0);
 
-        // Rebase so the export starts at tick 0 (§11 bar mapping).
+        // Rebase so the export starts at tick 0: the first exported event
+        // becomes the region start (§11 bar mapping for selections).
         double base = obj.selectedEvents.isEmpty() ? 0.0
                     : obj.selectedEvents.getReference (0).sourceBeat;
         if (obj.selectedEvents.size() > 1)
@@ -141,7 +146,11 @@ public:
 
         for (auto& e : obj.selectedEvents)
         {
-            const auto& m = e.message;
+            // MidiBuffer messages retain their sample offset in the message
+            // timestamp.  MidiMessageSequence::addEvent() *adds* its second
+            // argument to that timestamp, so remove it before converting the
+            // recorded beat to an SMF tick position.
+            const auto m = e.message.withTimeStamp (0.0);
             if (m.isNoteOn() || m.isNoteOff() || m.isController()
                 || m.isPitchWheel() || m.isProgramChange()
                 || m.isChannelPressure() || m.isAftertouch())
