@@ -34,6 +34,10 @@ accent/beat notes + channel configurable) with optional **count-in**
 - **Cubase**: create an instrument track with TempoGate. To hear its MIDI
   output (thru / Commit / click) on a real instrument, set the destination
   track's MIDI Input to the TempoGate track's MIDI output.
+- Some DAWs, such as Ableton Live, have an issue where they cannot load VST
+  plugins if the `MIDI Effect` option is enabled in the plugin's properties.
+  Therefore, when building VST3 plugins, set the value of `IS_MIDI_EFFECT`
+  to `FALSE`.
 - The plug-in itself produces no audio; it is a pure MIDI processor.
 
 ## Building (macOS)

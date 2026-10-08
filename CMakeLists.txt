@@ -33,15 +33,6 @@ endif ()
 
 add_subdirectory ("${JUCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
 
-# ------------------------------------------------------------------------------
-# Plugin formats per platform. AU exists only on Apple platforms; Windows gets
-# VST3 plus Standalone for DAW-less smoke testing.
-if (APPLE)
-    set (TEMPOGATE_PLUGIN_FORMATS AU VST3 Standalone)
-else ()
-    set (TEMPOGATE_PLUGIN_FORMATS VST3 Standalone)
-endif ()
-
 # Copying the VST3 into the system plug-in folder needs elevation on Windows,
 # so it is opt-out-able (pass -DTEMPOGATE_COPY_PLUGIN_AFTER_BUILD=OFF).
 option (TEMPOGATE_COPY_PLUGIN_AFTER_BUILD "Copy plug-ins to the system folder after build" ON)
@@ -56,38 +47,7 @@ if (TEMPOGATE_TAKE_LOG)
     add_compile_definitions (TEMPOGATE_TAKE_LOG=1)
 endif ()
 
-juce_add_plugin (TempoGate
-    COMPANY_NAME "kh"
-    BUNDLE_ID kr.me.kh.TempoGate
-    PLUGIN_MANUFACTURER_CODE Rzgl
-    PLUGIN_CODE Gzlb
-    VERSION ${PROJECT_VERSION}
-
-    IS_SYNTH TRUE
-    NEEDS_MIDI_INPUT TRUE
-    NEEDS_MIDI_OUTPUT TRUE
-    IS_MIDI_EFFECT TRUE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-
-    FORMATS ${TEMPOGATE_PLUGIN_FORMATS}
-    PRODUCT_NAME "TempoGate"
-
-    # NOTE (Cubase): IS_SYNTH makes JUCE emit the VST3 "Instrument"
-    # sub-category (result: "Instrument|Tools"), so Cubase lists TempoGate as
-    # a VSTi and routes MIDI input to it on an instrument track. AU keeps the
-    # MIDI-processor type (IS_MIDI_EFFECT wins there), so the Logic MIDI FX
-    # slot keeps working.
-    VST3_CATEGORIES Tools
-    # AU type intentionally unset: JUCE 9 defaults MIDI effects to
-    # kAudioUnitType_MIDIProcessor ('aumf', Logic MIDI FX).
-
-    COPY_PLUGIN_AFTER_BUILD ${TEMPOGATE_COPY_PLUGIN_AFTER_BUILD}
-)
-
-# Back-compat for sources including <JuceHeader.h> (Projucer-style).
-juce_generate_juce_header (TempoGate)
-
-target_sources (TempoGate PRIVATE
+set (TEMPOGATE_PLUGIN_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
@@ -98,33 +58,65 @@ target_sources (TempoGate PRIVATE
     Source/MidiExport.h
 )
 
-target_compile_definitions (TempoGate
-    PUBLIC
-        JUCE_STRICT_REFCOUNTEDPOINTER=1
-        JUCE_VST3_CAN_REPLACE_VST2=0
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
-)
+function (tempogate_configure_plugin target format is_midi_effect)
+    juce_add_plugin (${target}
+        COMPANY_NAME "kh"
+        BUNDLE_ID kr.me.kh.TempoGate
+        PLUGIN_MANUFACTURER_CODE Rzgl
+        PLUGIN_CODE Gzlb
+        VERSION ${PROJECT_VERSION}
+        IS_SYNTH TRUE
+        NEEDS_MIDI_INPUT TRUE
+        NEEDS_MIDI_OUTPUT TRUE
+        IS_MIDI_EFFECT ${is_midi_effect}
+        EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+        FORMATS ${format}
+        PRODUCT_NAME "TempoGate"
+        VST3_CATEGORIES Tools
+        COPY_PLUGIN_AFTER_BUILD ${TEMPOGATE_COPY_PLUGIN_AFTER_BUILD}
+    )
 
-target_link_libraries (TempoGate
-    PRIVATE
-        juce::juce_audio_basics
-        juce::juce_audio_devices
-        juce::juce_audio_formats
-        juce::juce_audio_plugin_client
-        juce::juce_audio_processors
-        juce::juce_audio_utils
-        juce::juce_core
-        juce::juce_data_structures
-        juce::juce_events
-        juce::juce_graphics
-        juce::juce_gui_basics
-        juce::juce_gui_extra
-    PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
-        juce::juce_recommended_warning_flags
-)
+    # Keep the Projucer-style JuceHeader.h include available to each target.
+    juce_generate_juce_header (${target})
+    target_sources (${target} PRIVATE ${TEMPOGATE_PLUGIN_SOURCES})
+
+    target_compile_definitions (${target}
+        PUBLIC
+            JUCE_STRICT_REFCOUNTEDPOINTER=1
+            JUCE_VST3_CAN_REPLACE_VST2=0
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+    )
+
+    target_link_libraries (${target}
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_audio_devices
+            juce::juce_audio_formats
+            juce::juce_audio_plugin_client
+            juce::juce_audio_processors
+            juce::juce_audio_utils
+            juce::juce_core
+            juce::juce_data_structures
+            juce::juce_events
+            juce::juce_graphics
+            juce::juce_gui_basics
+            juce::juce_gui_extra
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags
+    )
+endfunction ()
+
+# JUCE stores IS_MIDI_EFFECT on the shared-code target, so use one target per
+# format. VST3 is an Instrument|Tools VSTi for Cubase MIDI routing, while AU
+# remains an aumi MIDI FX for Logic. Standalone follows the VST3 setting.
+tempogate_configure_plugin (TempoGateVST3 VST3 FALSE)
+tempogate_configure_plugin (TempoGateStandalone Standalone FALSE)
+if (APPLE)
+    tempogate_configure_plugin (TempoGateAU AU TRUE)
+endif ()
 
 # ------------------------------------------------------------------------------
 # Headless smoke tests: drive the processor's processBlock directly.
