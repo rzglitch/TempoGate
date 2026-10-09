@@ -69,7 +69,7 @@ Requirements: C++ Build Tools, CMake >= 3.22, JUCE 9 sources at `~/JUCE`
 ### Install packages in Ubuntu >= 22.04
 
 ```sh
-apt-get update && apt-get install -y \
+sudo apt-get update && sudo apt-get install -y \
     build-essential \
     cmake \
     pkg-config \
