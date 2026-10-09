@@ -121,6 +121,19 @@ public:
                                                        (int) grid.getWidth(),
                                                        (int) (bounds.getHeight() - grid.getY())));
 
+            // beat subdivision lines
+            g.setColour (juce::Colour (0xff23262b));
+            const int firstBeat = juce::jmax (0, (int) std::floor (scrollOffsetBeats) - 1);
+            const int lastBeat = (int) std::ceil (scrollOffsetBeats + visibleBeats) + 1;
+            for (int beat = firstBeat; beat <= lastBeat; ++beat)
+            {
+                const double b = (double) beat;
+                const double bars = b / barLenBeats;
+                if (std::abs (bars - std::round (bars)) < 1e-6)
+                    continue; // coincides with a bar line
+                g.drawVerticalLine ((int) xFor (b), grid.getY(), grid.getBottom());
+            }
+
             const int firstBar = juce::jmax (0, (int) std::floor (scrollOffsetBars) - 1);
             const int lastBar = juce::jmin (totalBars, (int) std::ceil (scrollOffsetBars + visibleBars) + 1);
             for (int bar = firstBar; bar <= lastBar; ++bar)
