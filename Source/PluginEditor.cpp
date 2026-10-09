@@ -217,6 +217,20 @@ TempoGateAudioProcessorEditor::TempoGateAudioProcessorEditor (TempoGateAudioProc
     sourceRoll.onScrollDelta = scrollHandler;
     resultRoll.onScrollDelta = scrollHandler;
 
+    // horizontal timeline zoom: Cmd/Ctrl + wheel over a roll, or the +/- buttons
+    auto zoomHandler = [this] (double factor, double anchorFrac)
+    { setVisibleBars (visibleBars * (factor > 0.0 ? 1.25 : (1.0 / 1.25)), anchorFrac); };
+    sourceRoll.onZoomDelta = zoomHandler;
+    resultRoll.onZoomDelta = zoomHandler;
+
+    for (auto* b : { &zoomOutButton, &zoomInButton })
+    {
+        b->setTooltip ("Timeline horizontal zoom (Cmd/Ctrl + scroll over the rolls)");
+        addAndMakeVisible (b);
+    }
+    zoomOutButton.onClick = [this] { setVisibleBars (visibleBars * 1.25, 0.5); };
+    zoomInButton.onClick  = [this] { setVisibleBars (visibleBars / 1.25, 0.5); };
+
     //---- selection -------------------------------------------------------------------
     selectionLabel.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     selectionLabel.setColour (juce::Label::textColourId, juce::Colours::white);
@@ -398,6 +412,7 @@ void TempoGateAudioProcessorEditor::refreshAll (bool force)
     if (audioProcessor.isRecording() && barLen > 0.0)
         totalBars = juce::jmax (totalBars, (int) std::floor (curBar) + 2);
 
+    visibleBars = juce::jlimit (2.0, juce::jmax (16.0, (double) totalBars), visibleBars);
     selFirstSlider.setRange (1.0, (double) totalBars, 1.0);
     selLastSlider.setRange (1.0, (double) totalBars, 1.0);
 
@@ -640,7 +655,13 @@ void TempoGateAudioProcessorEditor::resized()
 
     sourceRoll.setBounds (area.getX(), wsY + 30, area.getWidth(), 144);
     resultRoll.setBounds (area.getX(), wsY + 180, area.getWidth(), 144);
-    timelineScrollBar.setBounds (area.getX() + 46, wsY + 325, area.getWidth() - 56, 12);
+
+    const int sbX = area.getX() + 46;
+    const int zoomW = 28, zoomGap = 4, zoomBlock = zoomW * 2 + zoomGap;
+    const int sbW = area.getWidth() - 46 - 16 - zoomBlock;
+    timelineScrollBar.setBounds (sbX, wsY + 325, sbW, 12);
+    zoomOutButton.setBounds (sbX + sbW + 6, wsY + 322, zoomW, 17);
+    zoomInButton.setBounds (zoomOutButton.getRight() + zoomGap, wsY + 322, zoomW, 17);
 
     // selection row
     const int selY = 566;
@@ -664,6 +685,23 @@ void TempoGateAudioProcessorEditor::resized()
     saveFileButton.setBounds (area.getX() + 544, btnY, 130, 40);
     clearButton.setBounds (area.getX() + 682, btnY, 90, 40);
     dragHintLabel.setBounds (area.getX(), btnY + 44, area.getWidth(), 34);
+}
+
+void TempoGateAudioProcessorEditor::setVisibleBars (double newVisibleBars, double anchorFrac)
+{
+    const double maxVisible = juce::jmax (16.0, (double) totalBars);
+    newVisibleBars = juce::jlimit (2.0, maxVisible, newVisibleBars);
+    if (std::abs (newVisibleBars - visibleBars) < 1e-6)
+        return;
+
+    // Keep the bar under the anchor point fixed while the window resizes.
+    anchorFrac = juce::jlimit (0.0, 1.0, anchorFrac);
+    const double anchorBar = scrollOffsetBars + anchorFrac * visibleBars;
+    visibleBars = newVisibleBars;
+    const double maxScroll = juce::jmax (0.0, (double) totalBars - visibleBars);
+    scrollOffsetBars = juce::jlimit (0.0, maxScroll, anchorBar - anchorFrac * visibleBars);
+    timelineScrollBar.setCurrentRange (scrollOffsetBars, visibleBars, juce::dontSendNotification);
+    refreshAll (true);
 }
 
 void TempoGateAudioProcessorEditor::scrollBarMoved (juce::ScrollBar* bar, double newRangeStart)

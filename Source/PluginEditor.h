@@ -36,9 +36,19 @@ public:
     }
 
     std::function<void (float)> onScrollDelta;
+    std::function<void (double, double)> onZoomDelta; // factor, anchorFrac (0..1 across grid)
 
-    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
     {
+        if ((e.mods.isCommandDown() || e.mods.isCtrlDown()) && onZoomDelta != nullptr)
+        {
+            const float gridX = 46.0f;
+            const float gridW = juce::jmax (1.0f, (float) getWidth() - gridX - 10.0f);
+            const double anchorFrac = juce::jlimit (0.0, 1.0, (double) (e.position.x - gridX) / (double) gridW);
+            const float d = std::abs (wheel.deltaY) >= std::abs (wheel.deltaX) ? wheel.deltaY : wheel.deltaX;
+            onZoomDelta ((double) -d, anchorFrac);
+            return;
+        }
         if (onScrollDelta != nullptr)
             onScrollDelta (std::abs (wheel.deltaX) > std::abs (wheel.deltaY) ? wheel.deltaX : wheel.deltaY);
     }
@@ -225,6 +235,7 @@ private:
     void updateViewButtons();
     void updateExportButtons();
     void refreshAll (bool force = false);
+    void setVisibleBars (double newVisibleBars, double anchorFrac);
     void doDragExport (TempoGateAudioProcessor::ExportScope scope);
     void doSaveMidiFile (TempoGateAudioProcessor::ExportScope scope);
     void cleanupStaleTempFiles();
@@ -266,6 +277,7 @@ private:
     juce::TextButton recordButton { "RECORD" }, stopButton { "STOP" }, playButton { "PLAY" };
     PianoRollView sourceRoll, resultRoll;
     juce::ScrollBar timelineScrollBar { false };
+    juce::TextButton zoomOutButton { "-" }, zoomInButton { "+" };
     double scrollOffsetBars = 0.0, visibleBars = 16.0;
     int totalBars = 16;
 
