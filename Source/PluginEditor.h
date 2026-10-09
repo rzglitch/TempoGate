@@ -20,17 +20,27 @@ public:
     struct NoteRect { int pitch = 60; double startBeat = 0.0; double lengthBeats = 1.0; };
 
     void setData (const juce::Array<NoteRect>& notes, double barLenBeats,
-                  int numBars, double viewBeats, const juce::String& title,
+                  int totalBars, double scrollOffsetBars, double visibleBars,
+                  const juce::String& title,
                   juce::Colour accent, bool ghost = false)
     {
         this->notes = notes;
         this->barLenBeats = juce::jmax (1.0, barLenBeats);
-        this->numBars = juce::jmax (1, numBars);
-        this->viewBeats = juce::jmax (4.0, viewBeats);
+        this->totalBars = juce::jmax (1, totalBars);
+        this->scrollOffsetBars = juce::jmax (0.0, scrollOffsetBars);
+        this->visibleBars = juce::jmax (1.0, visibleBars);
         this->title = title;
         this->accent = accent;
         this->ghost = ghost;
         repaint();
+    }
+
+    std::function<void (float)> onScrollDelta;
+
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        if (onScrollDelta != nullptr)
+            onScrollDelta (std::abs (wheel.deltaX) > std::abs (wheel.deltaY) ? wheel.deltaX : wheel.deltaY);
     }
 
     void setSelection (int first, int last, bool has)
@@ -100,21 +110,32 @@ public:
             double f = (double) (hi - p) / (double) (hi - lo);
             return grid.getY() + (float) f * grid.getHeight();
         };
+        const double visibleBeats = visibleBars * barLenBeats;
+        const double scrollOffsetBeats = scrollOffsetBars * barLenBeats;
         auto xFor = [&] (double b)
-        { return grid.getX() + (float) (b / viewBeats) * grid.getWidth(); };
+        { return grid.getX() + (float) ((b - scrollOffsetBeats) / visibleBeats) * grid.getWidth(); };
 
-        // bar / beat grid
-        for (int bar = 0; bar <= numBars; ++bar)
         {
-            float x = xFor (bar * barLenBeats);
-            g.setColour (bar % 1 == 0 ? juce::Colour (0xff3a3f47) : juce::Colour (0xff26292f));
-            g.drawVerticalLine ((int) x, grid.getY(), grid.getBottom());
-            g.setColour (juce::Colour (0xff8a8f98));
-            g.setFont (juce::FontOptions (10.0f));
-            if (bar < numBars)
-                g.drawText ("Bar " + juce::String (bar + 1), x + 3.0f, grid.getBottom() + 2.0f,
-                            60.0f, 14.0f, juce::Justification::left);
-        }
+            juce::Graphics::ScopedSaveState state (g);
+            g.reduceClipRegion (juce::Rectangle<int> ((int) grid.getX(), (int) grid.getY(),
+                                                       (int) grid.getWidth(),
+                                                       (int) (bounds.getHeight() - grid.getY())));
+
+            const int firstBar = juce::jmax (0, (int) std::floor (scrollOffsetBars) - 1);
+            const int lastBar = juce::jmin (totalBars, (int) std::ceil (scrollOffsetBars + visibleBars) + 1);
+            for (int bar = firstBar; bar <= lastBar; ++bar)
+            {
+                float x = xFor (bar * barLenBeats);
+                g.setColour (juce::Colour (0xff3a3f47));
+                g.drawVerticalLine ((int) x, grid.getY(), grid.getBottom());
+                if (bar < totalBars)
+                {
+                    g.setColour (juce::Colour (0xff8a8f98));
+                    g.setFont (juce::FontOptions (10.0f));
+                    g.drawText ("Bar " + juce::String (bar + 1), x + 3.0f, grid.getBottom() + 2.0f,
+                                60.0f, 14.0f, juce::Justification::left);
+                }
+            }
 
         // selection shade
         if (hasSel)
@@ -125,24 +146,27 @@ public:
             g.fillRect (juce::Rectangle<float> (x0, grid.getY(), x1 - x0, grid.getHeight()));
         }
 
-        // pitch labels
-        g.setColour (juce::Colour (0xff6a6f78));
-        g.setFont (juce::FontOptions (9.0f));
-        for (int p : { 36, 48, 60, 72, 84 })
-            g.drawText ("C" + juce::String (p / 12 - 1), 4.0f, yFor (p) - 7.0f, 40.0f, 14.0f,
-                        juce::Justification::left);
-
         // notes
         for (auto& n : notes)
         {
+            if (n.startBeat + n.lengthBeats < scrollOffsetBeats || n.startBeat > scrollOffsetBeats + visibleBeats)
+                continue;
             float x = xFor (n.startBeat);
-            float w = (float) (n.lengthBeats / viewBeats) * grid.getWidth();
+            float w = (float) (n.lengthBeats / visibleBeats) * grid.getWidth();
             float y = yFor (n.pitch);
             float h = juce::jmax (3.0f, grid.getHeight() / (hi - lo) * 1.6f);
             juce::Colour c = ghost ? accent.withAlpha (0.45f) : accent;
             g.setColour (c);
             g.fillRoundedRectangle (juce::Rectangle<float> (x, y - h * 0.5f, juce::jmax (3.0f, w), h), 2.0f);
         }
+        }
+
+        // pitch labels
+        g.setColour (juce::Colour (0xff6a6f78));
+        g.setFont (juce::FontOptions (9.0f));
+        for (int p : { 36, 48, 60, 72, 84 })
+            g.drawText ("C" + juce::String (p / 12 - 1), 4.0f, yFor (p) - 7.0f, 40.0f, 14.0f,
+                        juce::Justification::left);
 
         if (notes.isEmpty())
         {
@@ -155,8 +179,8 @@ public:
 
 private:
     juce::Array<NoteRect> notes;
-    double barLenBeats = 4.0, viewBeats = 16.0;
-    int numBars = 4;
+    double barLenBeats = 4.0, scrollOffsetBars = 0.0, visibleBars = 16.0;
+    int totalBars = 4;
     juce::String title;
     juce::Colour accent { juce::Colours::skyblue };
     bool ghost = false;
@@ -168,7 +192,8 @@ private:
 class TempoGateAudioProcessorEditor  : public juce::AudioProcessorEditor,
                                        public juce::Timer,
                                        public juce::ChangeListener,
-                                       public juce::DragAndDropContainer
+                                       public juce::DragAndDropContainer,
+                                       private juce::ScrollBar::Listener
 {
 public:
     TempoGateAudioProcessorEditor (TempoGateAudioProcessor&);
@@ -180,6 +205,7 @@ public:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void mouseDown (const juce::MouseEvent& e) override;
     void mouseDrag (const juce::MouseEvent& e) override;
+    void scrollBarMoved (juce::ScrollBar*, double newRangeStart) override;
 
 private:
     //---- actions ---------------------------------------------------------------
@@ -226,6 +252,9 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> takeAtt;
     juce::TextButton recordButton { "RECORD" }, stopButton { "STOP" }, playButton { "PLAY" };
     PianoRollView sourceRoll, resultRoll;
+    juce::ScrollBar timelineScrollBar { false };
+    double scrollOffsetBars = 0.0, visibleBars = 16.0;
+    int totalBars = 16;
 
     // selection
     juce::Label selectionLabel;

@@ -202,6 +202,20 @@ TempoGateAudioProcessorEditor::TempoGateAudioProcessorEditor (TempoGateAudioProc
 
     addAndMakeVisible (sourceRoll);
     addAndMakeVisible (resultRoll);
+    timelineScrollBar.addListener (this);
+    timelineScrollBar.setColour (juce::ScrollBar::backgroundColourId, juce::Colour (0xff0c0d10));
+    timelineScrollBar.setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff3a3f47));
+    timelineScrollBar.setColour (juce::ScrollBar::trackColourId, juce::Colour (0xff16181d));
+    addAndMakeVisible (timelineScrollBar);
+    auto scrollHandler = [this] (float delta)
+    {
+        const double maxScroll = juce::jmax (0.0, (double) totalBars - visibleBars);
+        scrollOffsetBars = juce::jlimit (0.0, maxScroll, scrollOffsetBars + (double) delta * 2.0);
+        timelineScrollBar.setCurrentRange (scrollOffsetBars, visibleBars, juce::dontSendNotification);
+        refreshAll (true);
+    };
+    sourceRoll.onScrollDelta = scrollHandler;
+    resultRoll.onScrollDelta = scrollHandler;
 
     //---- selection -------------------------------------------------------------------
     selectionLabel.setFont (juce::FontOptions (12.0f, juce::Font::bold));
@@ -376,15 +390,18 @@ void TempoGateAudioProcessorEditor::refreshAll (bool force)
     const double barLen = gate.getBarLengthBeats();
     int numBars = audioProcessor.getPerformance().getNumBars (barLen);
     if (numBars < 1) numBars = 4;
-    numBars = juce::jmin (numBars + 1, 16); // allow selecting one past for count-in room
-    selFirstSlider.setRange (1.0, (double) numBars, 1.0);
-    selLastSlider.setRange (1.0, (double) numBars, 1.0);
+    totalBars = juce::jmax (16, numBars + 1); // allow selecting one past for count-in room
+    selFirstSlider.setRange (1.0, (double) totalBars, 1.0);
+    selLastSlider.setRange (1.0, (double) totalBars, 1.0);
+    scrollOffsetBars = juce::jlimit (0.0, juce::jmax (0.0, (double) totalBars - visibleBars), scrollOffsetBars);
+    timelineScrollBar.setRangeLimits (0.0, (double) totalBars);
+    timelineScrollBar.setCurrentRange (scrollOffsetBars, visibleBars, juce::dontSendNotification);
 
-    int sf = 1, sl = numBars;
+    int sf = 1, sl = totalBars;
     if (audioProcessor.getPerformance().getHasBarSelection())
         audioProcessor.getPerformance().getBarSelection (sf, sl);
-    sf = juce::jlimit (1, numBars, sf); sl = juce::jlimit (sf, numBars, sl);
-    if ((int) selLastSlider.getValue() < sf || (int) selLastSlider.getValue() > numBars + 1)
+    sf = juce::jlimit (1, totalBars, sf); sl = juce::jlimit (sf, totalBars, sl);
+    if ((int) selLastSlider.getValue() < sf || (int) selLastSlider.getValue() > totalBars)
         selLastSlider.setValue ((double) sl, juce::dontSendNotification);
     if ((int) selFirstSlider.getValue() != sf && ! selFirstSlider.isMouseButtonDown())
         selFirstSlider.setValue ((double) sf, juce::dontSendNotification);
@@ -421,7 +438,6 @@ void TempoGateAudioProcessorEditor::refreshAll (bool force)
     // piano rolls
     auto evts = audioProcessor.getPerformance().snapshot();
     auto notes = PianoRollView::pairNotes (evts);
-    const double viewBeats = juce::jmax (barLen * 4.0, barLen * (double) numBars);
     const int viewMode = audioProcessor.getViewMode();
 
     juce::Colour origCol (0xff8fd3ff), convCol (0xffb49aff);
@@ -430,19 +446,19 @@ void TempoGateAudioProcessorEditor::refreshAll (bool force)
 
     if (viewMode == 0) // Original only
     {
-        sourceRoll.setData (notes, barLen, numBars, viewBeats, "SOURCE PERFORMANCE (Original)", origCol);
-        resultRoll.setData ({}, barLen, numBars, viewBeats, "PROJECT RESULT (Converted) - switch view", convCol, true);
+        sourceRoll.setData (notes, barLen, totalBars, scrollOffsetBars, visibleBars, "SOURCE PERFORMANCE (Original)", origCol);
+        resultRoll.setData ({}, barLen, totalBars, scrollOffsetBars, visibleBars, "PROJECT RESULT (Converted) - switch view", convCol, true);
     }
     else if (viewMode == 1) // Converted only
     {
-        sourceRoll.setData ({}, barLen, numBars, viewBeats, "SOURCE PERFORMANCE - switch view", origCol, true);
-        resultRoll.setData (notes, barLen, numBars, viewBeats,
+        sourceRoll.setData ({}, barLen, totalBars, scrollOffsetBars, visibleBars, "SOURCE PERFORMANCE - switch view", origCol, true);
+        resultRoll.setData (notes, barLen, totalBars, scrollOffsetBars, visibleBars,
                             "PROJECT RESULT (Converted @ " + juce::String (effT, 1) + " BPM)", convCol);
     }
     else // Compare
     {
-        sourceRoll.setData (notes, barLen, numBars, viewBeats, "SOURCE PERFORMANCE (Original)", origCol);
-        resultRoll.setData (notes, barLen, numBars, viewBeats,
+        sourceRoll.setData (notes, barLen, totalBars, scrollOffsetBars, visibleBars, "SOURCE PERFORMANCE (Original)", origCol);
+        resultRoll.setData (notes, barLen, totalBars, scrollOffsetBars, visibleBars,
                             "PROJECT RESULT (Converted overlay @ " + juce::String (effT, 1) + " BPM)", convCol);
     }
     sourceRoll.setSelection (sFirst, sLast, hasSel != 0);
@@ -608,8 +624,9 @@ void TempoGateAudioProcessorEditor::resized()
     place (stopButton, 80);
     playButton.setBounds (cx, wsY, area.getRight() - cx, 24);
 
-    sourceRoll.setBounds (area.getX(), wsY + 30, area.getWidth(), 150);
-    resultRoll.setBounds (area.getX(), wsY + 186, area.getWidth(), 150);
+    sourceRoll.setBounds (area.getX(), wsY + 30, area.getWidth(), 144);
+    resultRoll.setBounds (area.getX(), wsY + 180, area.getWidth(), 144);
+    timelineScrollBar.setBounds (area.getX() + 46, wsY + 325, area.getWidth() - 56, 12);
 
     // selection row
     const int selY = 566;
@@ -633,4 +650,13 @@ void TempoGateAudioProcessorEditor::resized()
     saveFileButton.setBounds (area.getX() + 544, btnY, 130, 40);
     clearButton.setBounds (area.getX() + 682, btnY, 90, 40);
     dragHintLabel.setBounds (area.getX(), btnY + 44, area.getWidth(), 34);
+}
+
+void TempoGateAudioProcessorEditor::scrollBarMoved (juce::ScrollBar* bar, double newRangeStart)
+{
+    if (bar == &timelineScrollBar)
+    {
+        scrollOffsetBars = newRangeStart;
+        refreshAll (true);
+    }
 }
