@@ -61,6 +61,54 @@ Validate the AU build with:
 auval -v aumi Gzlb Rzgl
 ```
 
+## Building (Linux)
+
+Requirements: C++ Build Tools, CMake >= 3.22, JUCE 9 sources at `~/JUCE`
+(override with `-DJUCE_DIR=<path>`).
+
+### Install packages in Ubuntu >= 22.04
+
+```sh
+apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    pkg-config \
+    libasound2-dev \
+    libfreetype-dev \
+    libfontconfig1-dev \
+    libgl1-mesa-dev \
+    libegl1-mesa-dev \
+    libcurl4-openssl-dev \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    unzip \
+    git
+```
+
+### Install packages in Fedora >= 43
+
+```sh
+sudo dnf group install development-tools c-development && \
+sudo dnf -y install \
+  cmake \
+  alsa-lib-devel \
+  freetype-devel \
+  fontconfig-devel \
+  mesa-libEGL-devel \
+  mesa-libGL-devel \
+  libcurl-devel \
+  webkit2gtk4.1-devel \
+  gtk3-devel \
+  pkgconf-pkg-config
+```
+
+### Build from source
+
+```sh
+cmake -S . -B ./Builds/CMake -DCMAKE_BUILD_TYPE=Release
+cmake --build ./Builds/CMake --config Release -j$(nproc)
+```
+
 ## Building (Windows - Visual Studio 2026)
 
 Requirements: Visual Studio 2026 (x64 workload), CMake 4.x,
