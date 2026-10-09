@@ -391,9 +391,23 @@ void TempoGateAudioProcessorEditor::refreshAll (bool force)
     int numBars = audioProcessor.getPerformance().getNumBars (barLen);
     if (numBars < 1) numBars = 4;
     totalBars = juce::jmax (16, numBars + 1); // allow selecting one past for count-in room
+
+    // While recording, let the timeline grow with the live playhead so silence
+    // at the end of a take does not stop the view from following it.
+    const double curBar = (barLen > 0.0) ? (audioProcessor.getRecordBeat() / barLen + 1.0) : 1.0;
+    if (audioProcessor.isRecording() && barLen > 0.0)
+        totalBars = juce::jmax (totalBars, (int) std::floor (curBar) + 2);
+
     selFirstSlider.setRange (1.0, (double) totalBars, 1.0);
     selLastSlider.setRange (1.0, (double) totalBars, 1.0);
-    scrollOffsetBars = juce::jlimit (0.0, juce::jmax (0.0, (double) totalBars - visibleBars), scrollOffsetBars);
+
+    // Auto-scroll (catch playhead) while recording: when the live playhead
+    // moves past the right edge of the visible window, page the view along so
+    // the head stays in sight (one bar in from the right).
+    const double maxScrollOffset = juce::jmax (0.0, (double) totalBars - visibleBars);
+    if (audioProcessor.isRecording() && curBar > scrollOffsetBars + visibleBars)
+        scrollOffsetBars = juce::jlimit (0.0, maxScrollOffset, curBar - visibleBars + 1.0);
+    scrollOffsetBars = juce::jlimit (0.0, maxScrollOffset, scrollOffsetBars);
     timelineScrollBar.setRangeLimits (0.0, (double) totalBars);
     timelineScrollBar.setCurrentRange (scrollOffsetBars, visibleBars, juce::dontSendNotification);
 
