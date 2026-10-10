@@ -237,3 +237,9 @@ off, check in order:
    and, if needed, a logging build (`~/tempogate_take.log` holds per-block
    clock state and per-event arrival-vs-assigned beats) to attribute any
    remainder to delivery vs engine on the spot.
+
+## License
+
+TempoGate is licensed under the **MIT License** (see [LICENSE](LICENSE)).
+
+Third-party components retain their own license terms (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
