@@ -4,6 +4,7 @@
   ==============================================================================
 */
 
+#include <climits>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
