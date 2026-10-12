@@ -1,5 +1,7 @@
 # TempoGate - MIDI Performance Workspace
 
+![TempoGate](Screenshot.jpg)
+
 Record at your tempo. Shape your bars. Drag your performance into your project.
 
 TempoGate is a MIDI performance environment (AU MIDI FX / VST3 / Standalone,

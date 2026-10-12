@@ -11,15 +11,20 @@
 TempoGateAudioProcessorEditor::TempoGateAudioProcessorEditor (TempoGateAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    setSize (940, 760);
+    setSize (940, 730);
+    setResizeLimits (940, 730, INT_MAX, INT_MAX);
     setWantsKeyboardFocus (false);
+    setResizable(true, true);
 
     //---- header -----------------------------------------------------------------
-    titleLabel.setText ("TEMPOGATE MIDI " + juce::String (ProjectInfo::versionString) + " - MIDI Performance Workspace",
+    logoDrawable = juce::Drawable::createFromImageData (BinaryData::tempogate_logo_svg,
+                                                        BinaryData::tempogate_logo_svgSize);
+
+    versionLabel.setText ("v" + juce::String (ProjectInfo::versionString),
                         juce::dontSendNotification);
-    titleLabel.setFont (juce::FontOptions (17.0f, juce::Font::bold));
-    titleLabel.setColour (juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible (titleLabel);
+    versionLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    versionLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa0a8));
+    addAndMakeVisible (versionLabel);
 
     ratioLabel.setFont (juce::FontOptions (15.0f, juce::Font::bold));
     ratioLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8fd3ff));
@@ -567,9 +572,14 @@ void TempoGateAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff1e2126));
 
+    if (logoDrawable != nullptr)
+        logoDrawable->drawWithin (g, logoBounds,
+                                  juce::RectanglePlacement::xLeft | juce::RectanglePlacement::centred,
+                                  1.0f);
+
     // section separators
     g.setColour (juce::Colour (0xff2e3238));
-    const float ys[] = { 64.0f, 150.0f, 210.0f, 560.0f, 606.0f };
+    const float ys[] = { 64.0f, 150.0f, (float) getHeight() - 170.0f, (float) getHeight() - 130.0f };
     for (float y : ys) g.drawHorizontalLine ((int) y, 12.0f, (float) getWidth() - 12.0f);
 }
 
@@ -600,10 +610,13 @@ void TempoGateAudioProcessorEditor::resized()
     auto area = getLocalBounds().reduced (12);
     int y = area.getY();
 
-    titleLabel.setBounds (area.getX(), y, W - 260, 26);
-    ratioLabel.setBounds (W - 260, y, 220, 26);
+    logoBounds = juce::Rectangle<float>
+        (((float) area.getX()) + 5, (float) y + 5, (float) (W - 260), 26.0f);
+    versionLabel.setBounds (area.getX() + 28, y + 23, 60, 30);
+
+    ratioLabel.setBounds (W - 232, y, 220, 26);
     y += 26;
-    hostLabel.setBounds (W - 320, y, 280, 16);
+    hostLabel.setBounds (W - 292, y, 280, 16);
     y += 22; // -> 64 separator
 
     // tempo row
@@ -638,47 +651,66 @@ void TempoGateAudioProcessorEditor::resized()
     y += 26;
 
     // workspace controls row (cursor layout, must fit area width)
-    const int wsY = 218;
+    const int wsY = 180;
     int cx = area.getX();
+    int rightX = area.getRight();
     const int gap = 6;
     auto place = [&] (juce::Component& c, int w)
     { c.setBounds (cx, wsY, w, 24); cx += w + gap; };
+    auto placeFloatR = [&] (juce::Component& c, int w)
+    {
+        rightX -= w;
+        c.setBounds (rightX, wsY, w, 24);
+        rightX -= gap;
+    };
     place (originalViewButton, 92);
     place (convertedViewButton, 92);
     place (compareViewButton, 92);
     place (triggerBox, 156);
     place (takeLabel, 40);
     place (takeBox, 112);
-    place (recordButton, 100);
-    place (stopButton, 80);
-    playButton.setBounds (cx, wsY, area.getRight() - cx, 24);
+    placeFloatR (playButton, 80);
+    placeFloatR (stopButton, 80);
+    placeFloatR (recordButton, 100);
+    // playButton.setBounds (cx, wsY, area.getRight() - cx, 24);
 
-    sourceRoll.setBounds (area.getX(), wsY + 30, area.getWidth(), 144);
-    resultRoll.setBounds (area.getX(), wsY + 180, area.getWidth(), 144);
+    // Keep the selection/export controls anchored to the bottom and let the
+    // workspace consume the remaining vertical space.
+    const int bottomReserve = 150;
+    const int selY = area.getBottom() - bottomReserve;
+    const int rollTop = wsY + 30;
+    const int rollBottom = selY;
+    const int rollAreaHeight = juce::jmax (180, rollBottom - rollTop);
+    const int eachRollHeight = (rollAreaHeight - 44) / 2;
+
+    sourceRoll.setBounds (area.getX(), rollTop,
+                          area.getWidth(), eachRollHeight);
+    resultRoll.setBounds (area.getX(), sourceRoll.getBottom() + 10,
+                          area.getWidth(), eachRollHeight);
 
     const int sbX = area.getX() + 46;
     const int zoomW = 28, zoomGap = 4, zoomBlock = zoomW * 2 + zoomGap;
-    const int sbW = area.getWidth() - 46 - 16 - zoomBlock;
-    timelineScrollBar.setBounds (sbX, wsY + 325, sbW, 12);
-    zoomOutButton.setBounds (sbX + sbW + 6, wsY + 322, zoomW, 17);
-    zoomInButton.setBounds (zoomOutButton.getRight() + zoomGap, wsY + 322, zoomW, 17);
+    const int sbW = area.getWidth() - 36 - 16 - zoomBlock;
+    const int timelineY = resultRoll.getBottom() + 8;
+    timelineScrollBar.setBounds (sbX, timelineY, sbW, 12);
+    zoomOutButton.setBounds (sbX + sbW + 6, timelineY - 3, zoomW, 17);
+    zoomInButton.setBounds (zoomOutButton.getRight() + zoomGap, timelineY - 3, zoomW, 17);
 
     // selection row
-    const int selY = 566;
     selectionLabel.setBounds (area.getX(), selY, 250, 22);
     selFirstSlider.setBounds (area.getX() + 256, selY, 210, 22);
     selLastSlider.setBounds (area.getX() + 472, selY, 210, 22);
     fromBarButton.setBounds (area.getX() + 688, selY, 100, 22);
-    healthLabel.setBounds (area.getX() + 794, selY, 110, 22);
+    healthLabel.setBounds (area.getRight() - 140, selY, 140, 22);
 
     // export row
-    const int exY = 612;
+    const int exY = area.getBottom() - 100;
     exportLabel.setBounds (area.getX(), exY, 400, 20);
     exportConvertedButton.setBounds (area.getX() + 410, exY, 100, 20);
     exportOriginalButton.setBounds (area.getX() + 514, exY, 90, 20);
     exportSelectionButton.setBounds (area.getX() + 608, exY, 90, 20);
 
-    const int btnY = 638;
+    const int btnY = area.getBottom() - 70;
     dragFullButton.setBounds (area.getX(), btnY, 220, 40);
     dragSelButton.setBounds (area.getX() + 228, btnY, 170, 40);
     commitButton.setBounds (area.getX() + 406, btnY, 130, 40);

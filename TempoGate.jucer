@@ -26,6 +26,12 @@
             file="Source/PerformanceModel.h"/>
       <FILE id="MidiExp01" name="MidiExport.h" compile="0" resource="0" file="Source/MidiExport.h"/>
     </GROUP>
+    <GROUP id="{C146D44B-324E-1BB2-BA9C-981D5BFF0017}" name="BinaryData">
+      <GROUP id="{399B124D-1CF2-BD6A-0501-F36B6269FD4F}" name="images">
+        <FILE id="BYzfpn" name="tempogate_logo.svg" compile="0" resource="1"
+              file="Assets/images/tempogate_logo.svg"/>
+      </GROUP>
+    </GROUP>
   </MAINGROUP>
   <MODULES>
     <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>

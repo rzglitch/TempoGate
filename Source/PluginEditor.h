@@ -243,7 +243,9 @@ private:
     TempoGateAudioProcessor& audioProcessor;
 
     // header
-    juce::Label titleLabel, ratioLabel, hostLabel;
+    juce::Label versionLabel, ratioLabel, hostLabel;
+    std::unique_ptr<juce::Drawable> logoDrawable;
+    juce::Rectangle<float> logoBounds;
 
     // tempo section
     juce::Label sourceTempoLabel, projectTempoLabel;

@@ -90,6 +90,7 @@ function (tempogate_configure_plugin target format is_midi_effect)
 
     target_link_libraries (${target}
         PRIVATE
+            BinaryData
             juce::juce_audio_basics
             juce::juce_audio_devices
             juce::juce_audio_formats
@@ -108,6 +109,9 @@ function (tempogate_configure_plugin target format is_midi_effect)
             juce::juce_recommended_warning_flags
     )
 endfunction ()
+
+# Embedded UI assets (logo), shared by every format target.
+juce_add_binary_data (BinaryData SOURCES Assets/images/tempogate_logo.svg)
 
 # JUCE stores IS_MIDI_EFFECT on the shared-code target, so use one target per
 # format. VST3 is an Instrument|Tools VSTi for Cubase MIDI routing, while AU
@@ -146,6 +150,7 @@ if (TEMPOGATE_BUILD_TESTS)
 
     target_link_libraries (TempoGateTest
         PRIVATE
+            BinaryData
             juce::juce_audio_basics
             juce::juce_audio_devices
             juce::juce_audio_formats
